@@ -998,7 +998,12 @@ const App: React.FC = () => {
       {mode === 'preview' && (
         // Fixed viewport height so the header and bottom toolbar stay pinned and only
         // the sheet area (below) scrolls/zooms. 100dvh tracks the iPad Safari toolbar.
-        <div className="h-[100dvh] flex flex-col bg-slate-500">
+        // select-none across the whole screen so stylus drawing never turns into a
+        // text-selection gesture on the toolbar labels/buttons.
+        <div
+          className="h-[100dvh] flex flex-col bg-slate-500 select-none"
+          style={{ WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
+        >
             <div className="bg-white p-4 shadow-md z-10 border-b border-gray-200">
                 <div className="max-w-5xl mx-auto flex items-center justify-between">
                     <h2 className="font-bold flex items-center gap-2 text-slate-800">
