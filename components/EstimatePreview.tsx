@@ -21,6 +21,9 @@ interface EstimatePreviewProps {
   penWidth?: PenWidth;
   zoom?: number;
   pinchActive?: boolean;
+  textFontSize?: number;
+  selectedTextId?: string | null;
+  onSelectTextId?: (id: string | null) => void;
 }
 
 export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
@@ -34,6 +37,9 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
   penWidth,
   zoom,
   pinchActive,
+  textFontSize,
+  selectedTextId,
+  onSelectTextId,
 }) => {
     const calculateTotal = () => {
       return data.items.reduce((acc, item) => acc + item.price * item.quantity, 0);
@@ -216,6 +222,9 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                      penWidth={penWidth}
                      zoom={zoom}
                      pinchActive={pinchActive}
+                     textFontSize={textFontSize}
+                     selectedTextId={selectedTextId}
+                     onSelectTextId={onSelectTextId}
                    />
                </div>
             </div>

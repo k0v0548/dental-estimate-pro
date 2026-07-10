@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Download, Trash2, X, AlertTriangle, History, Save, Pencil, ChevronUp, ChevronDown, RefreshCw, Pen, Eraser, Anchor, ZoomIn, ZoomOut, Maximize, Undo2 } from 'lucide-react';
+import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Download, Trash2, X, AlertTriangle, History, Save, Pencil, ChevronUp, ChevronDown, RefreshCw, Pen, Eraser, Anchor, ZoomIn, ZoomOut, Maximize, Undo2, Type } from 'lucide-react';
 import { TREATMENT_MENU } from './constants';
 import { SelectedItem, TreatmentItem, SavedEstimate } from './types';
 import { EstimatePreview } from './components/EstimatePreview';
-import { DentalAnnotationData, EMPTY_ANNOTATION, ToolMode, PenColor, PenWidth } from './components/DentalChartCanvas';
+import { DentalAnnotationData, EMPTY_ANNOTATION, ToolMode, PenColor, PenWidth, TEXT_FONT_DEFAULT, TEXT_FONT_STEP, clampTextFont } from './components/DentalChartCanvas';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
@@ -81,6 +81,8 @@ const App: React.FC = () => {
   const [toolMode, setToolMode] = useState<ToolMode>('pen');
   const [penColor, setPenColor] = useState<PenColor>('black');
   const [penWidth, setPenWidth] = useState<PenWidth>('medium');
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [textFontSize, setTextFontSize] = useState<number>(TEXT_FONT_DEFAULT);
 
   // Undo stack for annotations. Only "commit" changes (finished stroke, stamp
   // add/delete, clear) are recorded — continuous stamp dragging is not.
@@ -110,6 +112,20 @@ const App: React.FC = () => {
       undoStackRef.current.push(prev);
       setCanUndo(true);
       return EMPTY_ANNOTATION;
+    });
+  };
+
+  // Adjust the font size for new text boxes, and resize the currently selected one.
+  const changeTextFontSize = (delta: number) => {
+    setTextFontSize((prev) => {
+      const next = clampTextFont(prev + delta);
+      if (selectedTextId) {
+        setAnnotation((ann) => ({
+          ...ann,
+          texts: ann.texts.map((t) => (t.id === selectedTextId ? { ...t, fontSize: next } : t)),
+        }));
+      }
+      return next;
     });
   };
 
@@ -1039,6 +1055,9 @@ const App: React.FC = () => {
                             penWidth={penWidth}
                             zoom={zoom}
                             pinchActive={pinchActive}
+                            textFontSize={textFontSize}
+                            selectedTextId={selectedTextId}
+                            onSelectTextId={setSelectedTextId}
                         />
                     </div>
                 </div>
@@ -1108,6 +1127,38 @@ const App: React.FC = () => {
                         <Anchor size={14} />
                         インプラント(下顎用)
                     </button>
+
+                    <button
+                        onClick={() => setToolMode('text')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            toolMode === 'text'
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                        }`}
+                    >
+                        <Type size={14} />
+                        テキスト
+                    </button>
+
+                    {/* Font-size control, shown while the text tool is active */}
+                    {toolMode === 'text' && (
+                        <div className="flex items-center gap-1">
+                            <button
+                                onClick={() => changeTextFontSize(-TEXT_FONT_STEP)}
+                                className="w-7 h-7 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
+                                aria-label="文字を小さく"
+                            >
+                                <span className="text-[11px]">A</span>
+                            </button>
+                            <button
+                                onClick={() => changeTextFontSize(TEXT_FONT_STEP)}
+                                className="w-7 h-7 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
+                                aria-label="文字を大きく"
+                            >
+                                <span className="text-[15px]">A</span>
+                            </button>
+                        </div>
+                    )}
 
                     <div className="w-px h-5 bg-slate-200 mx-1" />
 

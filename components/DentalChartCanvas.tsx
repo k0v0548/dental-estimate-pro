@@ -1,9 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 export type PenColor = 'black' | 'red';
-export type ToolMode = 'pen' | 'eraser' | 'stamp-upper' | 'stamp-lower';
+export type ToolMode = 'pen' | 'eraser' | 'stamp-upper' | 'stamp-lower' | 'text';
 export type PenWidth = 'thin' | 'medium' | 'thick';
 export type StampOrientation = 'upper' | 'lower';
+
+// Text font size as a fraction of the chart container width, so it scales identically
+// between the interactive preview and the hidden PDF-source copy.
+export const TEXT_FONT_MIN = 0.02;
+export const TEXT_FONT_MAX = 0.12;
+export const TEXT_FONT_STEP = 0.005;
+export const TEXT_FONT_DEFAULT = 0.045;
+export const clampTextFont = (f: number) => Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, f));
 // 'commit' = an undoable action (finished stroke, stamp add/delete);
 // 'move' = a continuous stamp drag, not recorded in undo history.
 export type AnnotationChangeKind = 'commit' | 'move';
@@ -65,12 +73,21 @@ export interface ImplantStamp {
   orientation: StampOrientation;
 }
 
+export interface TextAnnotation {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  fontSize: number; // fraction of container width
+}
+
 export interface DentalAnnotationData {
   strokes: Stroke[];
   stamps: ImplantStamp[];
+  texts: TextAnnotation[];
 }
 
-export const EMPTY_ANNOTATION: DentalAnnotationData = { strokes: [], stamps: [] };
+export const EMPTY_ANNOTATION: DentalAnnotationData = { strokes: [], stamps: [], texts: [] };
 
 interface DentalChartCanvasProps {
   data: DentalAnnotationData;
@@ -84,6 +101,12 @@ interface DentalChartCanvasProps {
   zoom?: number;
   // True while the user is pinch-zooming; suppresses drawing so a pinch doesn't leave a mark.
   pinchActive?: boolean;
+  // Font size (fraction of width) used when placing a new text box.
+  textFontSize?: number;
+  // Selected text box id is lifted to the parent so the toolbar's font-size control
+  // can target it. null when nothing is selected.
+  selectedTextId?: string | null;
+  onSelectTextId?: (id: string | null) => void;
 }
 
 export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
@@ -95,12 +118,20 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
   penWidth = 'medium',
   zoom = 1,
   pinchActive = false,
+  textFontSize = TEXT_FONT_DEFAULT,
+  selectedTextId = null,
+  onSelectTextId,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inProgressStrokeRef = useRef<Stroke | null>(null);
   const sizeRef = useRef({ width: 0, height: 0 });
   const [selectedStampId, setSelectedStampId] = useState<string | null>(null);
+  // Container width in CSS px, kept in state so text font size (a fraction of width)
+  // re-renders when the box resizes or the preview zooms.
+  const [renderWidth, setRenderWidth] = useState(0);
+  const autoFocusTextIdRef = useRef<string | null>(null);
+  const texts = data.texts ?? [];
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -170,6 +201,7 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     const w = Math.max(1, Math.round(rect.width));
     const h = Math.max(1, Math.round(rect.height));
     sizeRef.current = { width: w, height: h };
+    setRenderWidth(w);
     canvas.width = w * CANVAS_PIXEL_RATIO;
     canvas.height = h * CANVAS_PIXEL_RATIO;
     redraw();
@@ -227,10 +259,26 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     }
 
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
     setSelectedStampId(null);
+    onSelectTextId?.(null); // tapping the canvas deselects any text box
     const point = getRelativePoint(e.clientX, e.clientY);
     if (!point) return;
+
+    if (toolMode === 'text') {
+      const newText: TextAnnotation = {
+        id: `text-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        x: point.x,
+        y: point.y,
+        text: '',
+        fontSize: textFontSize,
+      };
+      autoFocusTextIdRef.current = newText.id;
+      onChange?.({ ...data, texts: [...texts, newText] }, 'commit');
+      onSelectTextId?.(newText.id);
+      return;
+    }
+
+    e.currentTarget.setPointerCapture(e.pointerId);
 
     if (toolMode === 'stamp-upper' || toolMode === 'stamp-lower') {
       const stamp: ImplantStamp = {
@@ -288,6 +336,19 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     onChange?.({ ...data, stamps: data.stamps.filter((s) => s.id !== id) }, 'commit');
   };
 
+  const moveText = (id: string, x: number, y: number) => {
+    onChange?.({ ...data, texts: texts.map((t) => (t.id === id ? { ...t, x, y } : t)) }, 'move');
+  };
+
+  const editText = (id: string, value: string) => {
+    onChange?.({ ...data, texts: texts.map((t) => (t.id === id ? { ...t, text: value } : t)) }, 'move');
+  };
+
+  const deleteText = (id: string) => {
+    if (selectedTextId === id) onSelectTextId?.(null);
+    onChange?.({ ...data, texts: texts.filter((t) => t.id !== id) }, 'commit');
+  };
+
   return (
     <div
       ref={containerRef}
@@ -304,7 +365,11 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
       <canvas
         ref={canvasRef}
         className={`absolute inset-0 w-full h-full ${interactive ? 'touch-none' : 'pointer-events-none'} ${
-          interactive && (toolMode === 'stamp-upper' || toolMode === 'stamp-lower') ? 'cursor-crosshair' : ''
+          interactive && (toolMode === 'stamp-upper' || toolMode === 'stamp-lower')
+            ? 'cursor-crosshair'
+            : interactive && toolMode === 'text'
+            ? 'cursor-text'
+            : ''
         }`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -323,6 +388,23 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
             onSelect={() => setSelectedStampId(stamp.id)}
             onMove={(x, y) => moveStamp(stamp.id, x, y)}
             onDelete={() => deleteStamp(stamp.id)}
+          />
+        ))}
+        {texts.map((t) => (
+          <TextAnnotationMarker
+            key={t.id}
+            text={t}
+            fontPx={t.fontSize * renderWidth}
+            interactive={interactive}
+            editingEnabled={interactive && toolMode === 'text'}
+            selected={interactive && toolMode === 'text' && selectedTextId === t.id}
+            autoFocus={autoFocusTextIdRef.current === t.id}
+            containerRef={containerRef}
+            onSelect={() => onSelectTextId?.(t.id)}
+            onMove={(x, y) => moveText(t.id, x, y)}
+            onEdit={(value) => editText(t.id, value)}
+            onDelete={() => deleteText(t.id)}
+            onAutoFocusDone={() => { autoFocusTextIdRef.current = null; }}
           />
         ))}
       </div>
@@ -429,6 +511,154 @@ const ImplantStampMarker: React.FC<ImplantStampMarkerProps> = ({
         >
           ×
         </button>
+      )}
+    </div>
+  );
+};
+
+interface TextAnnotationMarkerProps {
+  text: TextAnnotation;
+  fontPx: number;
+  interactive: boolean;
+  editingEnabled: boolean; // interactive AND the text tool is active
+  selected: boolean;
+  autoFocus: boolean;
+  containerRef: React.RefObject<HTMLDivElement>;
+  onSelect: () => void;
+  onMove: (x: number, y: number) => void;
+  onEdit: (value: string) => void;
+  onDelete: () => void;
+  onAutoFocusDone: () => void;
+}
+
+const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
+  text,
+  fontPx,
+  interactive,
+  editingEnabled,
+  selected,
+  autoFocus,
+  containerRef,
+  onSelect,
+  onMove,
+  onEdit,
+  onDelete,
+  onAutoFocusDone,
+}) => {
+  const editRef = useRef<HTMLDivElement>(null);
+  const draggedRef = useRef(false);
+  const startClientRef = useRef({ x: 0, y: 0 });
+  const editable = editingEnabled && selected;
+
+  // Keep the DOM text in sync with state without clobbering the caret while typing.
+  useEffect(() => {
+    const el = editRef.current;
+    if (el && el.textContent !== text.text) {
+      el.textContent = text.text;
+    }
+  }, [text.text]);
+
+  // Focus a newly placed box and put the caret at the end.
+  useEffect(() => {
+    if (autoFocus && editable && editRef.current) {
+      const el = editRef.current;
+      el.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      onAutoFocusDone();
+    }
+  }, [autoFocus, editable, onAutoFocusDone]);
+
+  const handleHandleDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    draggedRef.current = false;
+    startClientRef.current = { x: e.clientX, y: e.clientY };
+  };
+  const handleHandleMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.buttons === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const dx = e.clientX - startClientRef.current.x;
+    const dy = e.clientY - startClientRef.current.y;
+    if (!draggedRef.current && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    draggedRef.current = true;
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    onMove(
+      Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+      Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
+    );
+  };
+
+  return (
+    <div
+      className="absolute"
+      style={{
+        left: `${text.x * 100}%`,
+        top: `${text.y * 100}%`,
+        maxWidth: '85%',
+        pointerEvents: editingEnabled ? 'auto' : 'none',
+        touchAction: 'none',
+      }}
+    >
+      <div
+        ref={editRef}
+        contentEditable={editable}
+        suppressContentEditableWarning
+        onInput={(e) => onEdit(e.currentTarget.textContent ?? '')}
+        onPointerDown={(e) => {
+          // Let the caret land normally while editing; otherwise select on tap.
+          if (!editable) {
+            e.preventDefault();
+            e.stopPropagation();
+            onSelect();
+          }
+        }}
+        className={`whitespace-pre-wrap leading-tight outline-none ${
+          selected ? 'ring-1 ring-blue-500 bg-white/40' : ''
+        }`}
+        style={{
+          fontSize: fontPx,
+          color: '#111827',
+          minWidth: Math.max(6, fontPx * 0.6),
+          minHeight: fontPx,
+          padding: '1px 2px',
+          cursor: editable ? 'text' : editingEnabled ? 'pointer' : 'default',
+        }}
+      />
+      {selected && (
+        <>
+          {/* Move handle */}
+          <div
+            onPointerDown={handleHandleDown}
+            onPointerMove={handleHandleMove}
+            className="absolute -top-3 -left-3 w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] leading-5 text-center shadow cursor-grab select-none"
+            aria-label="テキストを移動"
+          >
+            ✥
+          </div>
+          {/* Delete button */}
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="absolute -top-3 -right-3 w-5 h-5 rounded-full bg-red-600 text-white text-[10px] leading-5 flex items-center justify-center shadow"
+            aria-label="テキストを削除"
+          >
+            ×
+          </button>
+        </>
       )}
     </div>
   );
