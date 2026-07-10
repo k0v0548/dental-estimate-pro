@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Download, Trash2, X, AlertTriangle, History, Save, Pencil, ChevronUp, ChevronDown, RefreshCw, Pen, Eraser, Anchor, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
+import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Download, Trash2, X, AlertTriangle, History, Save, Pencil, ChevronUp, ChevronDown, RefreshCw, Pen, Eraser, Anchor, ZoomIn, ZoomOut, Maximize, Undo2 } from 'lucide-react';
 import { TREATMENT_MENU } from './constants';
 import { SelectedItem, TreatmentItem, SavedEstimate } from './types';
 import { EstimatePreview } from './components/EstimatePreview';
@@ -82,30 +82,104 @@ const App: React.FC = () => {
   const [penColor, setPenColor] = useState<PenColor>('black');
   const [penWidth, setPenWidth] = useState<PenWidth>('medium');
 
-  const clearAnnotation = () => setAnnotation(EMPTY_ANNOTATION);
+  // Undo stack for annotations. Only "commit" changes (finished stroke, stamp
+  // add/delete, clear) are recorded — continuous stamp dragging is not.
+  const undoStackRef = useRef<DentalAnnotationData[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
 
-  // --- Preview Zoom State ---
+  const applyAnnotation = (next: DentalAnnotationData, kind: 'commit' | 'move' = 'commit') => {
+    setAnnotation((prev) => {
+      if (kind === 'commit') {
+        undoStackRef.current.push(prev);
+        setCanUndo(true);
+      }
+      return next;
+    });
+  };
+  const undoAnnotation = () => {
+    setAnnotation((prev) => {
+      const stack = undoStackRef.current;
+      if (stack.length === 0) return prev;
+      const restored = stack.pop()!;
+      setCanUndo(stack.length > 0);
+      return restored;
+    });
+  };
+  const clearAnnotation = () => {
+    setAnnotation((prev) => {
+      undoStackRef.current.push(prev);
+      setCanUndo(true);
+      return EMPTY_ANNOTATION;
+    });
+  };
+
+  // --- Preview Zoom / Pan State ---
   const ZOOM_MIN = 0.3;
   const ZOOM_MAX = 3;
   const A4_WIDTH_PX = 794; // 210mm at 96dpi
+  const A4_HEIGHT_PX = 1123; // 297mm at 96dpi
   const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
   const [zoom, setZoom] = useState(1);
   const [pinchActive, setPinchActive] = useState(false);
   const zoomRef = useRef(1);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   const stageScrollRef = useRef<HTMLDivElement>(null);
+  const sheetBoxRef = useRef<HTMLDivElement>(null);
+  // Anchor point to keep fixed on screen across a zoom change (finger/cursor/center).
+  const zoomAnchorRef = useRef<{ fx: number; fy: number; clientX: number; clientY: number } | null>(null);
+
+  // Change zoom while keeping the given screen point pinned to the same spot on the sheet.
+  const zoomToward = (nextZoom: number, clientX: number, clientY: number) => {
+    const box = sheetBoxRef.current;
+    if (box) {
+      const r = box.getBoundingClientRect();
+      zoomAnchorRef.current = {
+        fx: (clientX - r.left) / r.width,
+        fy: (clientY - r.top) / r.height,
+        clientX,
+        clientY,
+      };
+    }
+    setZoom(clampZoom(nextZoom));
+  };
+  const zoomTowardCenter = (nextZoom: number) => {
+    const el = stageScrollRef.current;
+    if (!el) { setZoom(clampZoom(nextZoom)); return; }
+    const r = el.getBoundingClientRect();
+    zoomToward(nextZoom, r.left + r.width / 2, r.top + r.height / 2);
+  };
+
+  // After a zoom change, scroll so the anchored sheet point stays under the finger/cursor.
+  useLayoutEffect(() => {
+    const a = zoomAnchorRef.current;
+    const el = stageScrollRef.current;
+    const box = sheetBoxRef.current;
+    if (!a || !el || !box) return;
+    const r = box.getBoundingClientRect();
+    const targetLeft = a.clientX - a.fx * r.width;
+    const targetTop = a.clientY - a.fy * r.height;
+    el.scrollLeft += r.left - targetLeft;
+    el.scrollTop += r.top - targetTop;
+    zoomAnchorRef.current = null;
+  }, [zoom]);
+
+  const fitZoom = () => {
+    const el = stageScrollRef.current;
+    if (!el) return;
+    zoomAnchorRef.current = null;
+    setZoom(clampZoom(Math.min(1, (el.clientWidth - 32) / A4_WIDTH_PX)));
+  };
 
   // Fit the sheet to the available width whenever the preview screen opens.
   useEffect(() => {
     if (mode !== 'preview') return;
-    const el = stageScrollRef.current;
-    if (!el) return;
-    setZoom(clampZoom(Math.min(1, (el.clientWidth - 32) / A4_WIDTH_PX)));
+    fitZoom();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   // Pinch / trackpad-pinch / ctrl+wheel zoom on the preview stage. Native listeners
-  // (not React's) so we can preventDefault the browser's own page zoom.
+  // (not React's) so we can preventDefault the browser's own page zoom. One-finger
+  // touches fall through to native scrolling so the user can pan to any part of the sheet.
   useEffect(() => {
     const el = stageScrollRef.current;
     if (mode !== 'preview' || !el) return;
@@ -113,12 +187,13 @@ const App: React.FC = () => {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return; // trackpad pinch and ctrl+wheel arrive as ctrl+wheel
       e.preventDefault();
-      setZoom((z) => clampZoom(z * (1 - e.deltaY * 0.01)));
+      zoomToward(zoomRef.current * (1 - e.deltaY * 0.01), e.clientX, e.clientY);
     };
 
     let pinchStartDist = 0;
     let pinchStartZoom = 1;
     const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = (t: TouchList) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
         pinchStartDist = dist(e.touches);
@@ -129,7 +204,8 @@ const App: React.FC = () => {
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length === 2 && pinchStartDist > 0) {
         e.preventDefault();
-        setZoom(clampZoom(pinchStartZoom * (dist(e.touches) / pinchStartDist)));
+        const m = mid(e.touches);
+        zoomToward(pinchStartZoom * (dist(e.touches) / pinchStartDist), m.x, m.y);
       }
     };
     const onTouchEnd = (e: TouchEvent) => {
@@ -151,6 +227,7 @@ const App: React.FC = () => {
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchEnd);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   // Save menu to LocalStorage
@@ -929,22 +1006,34 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            <div ref={stageScrollRef} className="flex-1 overflow-auto p-4 md:p-8 flex justify-center bg-slate-500">
+            <div ref={stageScrollRef} className="flex-1 overflow-auto p-4 md:p-8 bg-slate-500">
+                {/* Sized box reserves the scaled footprint so scrolling/centering are correct;
+                    the inner div does the visual scale from its top-left corner. */}
                 <div
-                    className="origin-top mb-20 shadow-2xl"
-                    style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', touchAction: 'none' }}
+                    ref={sheetBoxRef}
+                    className="mb-20 shadow-2xl"
+                    style={{ width: A4_WIDTH_PX * zoom, height: A4_HEIGHT_PX * zoom, margin: '0 auto' }}
                 >
-                     <EstimatePreview
-                        data={previewData}
-                        annotation={annotation}
-                        onAnnotationChange={setAnnotation}
-                        interactive
-                        toolMode={toolMode}
-                        penColor={penColor}
-                        penWidth={penWidth}
-                        zoom={zoom}
-                        pinchActive={pinchActive}
-                     />
+                    <div
+                        style={{
+                            width: A4_WIDTH_PX,
+                            height: A4_HEIGHT_PX,
+                            transform: `scale(${zoom})`,
+                            transformOrigin: '0 0',
+                        }}
+                    >
+                        <EstimatePreview
+                            data={previewData}
+                            annotation={annotation}
+                            onAnnotationChange={applyAnnotation}
+                            interactive
+                            toolMode={toolMode}
+                            penColor={penColor}
+                            penWidth={penWidth}
+                            zoom={zoom}
+                            pinchActive={pinchActive}
+                        />
+                    </div>
                 </div>
             </div>
 
@@ -1040,6 +1129,19 @@ const App: React.FC = () => {
                     <div className="w-px h-5 bg-slate-200 mx-1" />
 
                     <button
+                        onClick={undoAnnotation}
+                        disabled={!canUndo}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            canUndo
+                                ? 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                                : 'border-slate-200 text-slate-300 cursor-not-allowed'
+                        }`}
+                    >
+                        <Undo2 size={14} />
+                        一つ戻る
+                    </button>
+
+                    <button
                         onClick={clearAnnotation}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 text-slate-500 hover:bg-slate-50 transition-colors"
                     >
@@ -1050,7 +1152,7 @@ const App: React.FC = () => {
                     {/* Zoom controls (pinch / trackpad-pinch also work directly on the sheet) */}
                     <div className="flex items-center gap-1 ml-auto">
                         <button
-                            onClick={() => setZoom((z) => clampZoom(z - 0.1))}
+                            onClick={() => zoomTowardCenter(zoomRef.current - 0.1)}
                             className="p-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors"
                             aria-label="縮小"
                         >
@@ -1060,17 +1162,14 @@ const App: React.FC = () => {
                             {Math.round(zoom * 100)}%
                         </span>
                         <button
-                            onClick={() => setZoom((z) => clampZoom(z + 0.1))}
+                            onClick={() => zoomTowardCenter(zoomRef.current + 0.1)}
                             className="p-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors"
                             aria-label="拡大"
                         >
                             <ZoomIn size={14} />
                         </button>
                         <button
-                            onClick={() => {
-                                const el = stageScrollRef.current;
-                                setZoom(el ? clampZoom(Math.min(1, (el.clientWidth - 32) / A4_WIDTH_PX)) : 1);
-                            }}
+                            onClick={fitZoom}
                             className="p-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors"
                             aria-label="全体表示"
                         >

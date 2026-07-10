@@ -4,6 +4,9 @@ export type PenColor = 'black' | 'red';
 export type ToolMode = 'pen' | 'eraser' | 'stamp-upper' | 'stamp-lower';
 export type PenWidth = 'thin' | 'medium' | 'thick';
 export type StampOrientation = 'upper' | 'lower';
+// 'commit' = an undoable action (finished stroke, stamp add/delete);
+// 'move' = a continuous stamp drag, not recorded in undo history.
+export type AnnotationChangeKind = 'commit' | 'move';
 
 // Relative to the chart container's rendered width, so line thickness scales
 // consistently between the interactive preview and the hidden PDF-source copy.
@@ -71,7 +74,7 @@ export const EMPTY_ANNOTATION: DentalAnnotationData = { strokes: [], stamps: [] 
 
 interface DentalChartCanvasProps {
   data: DentalAnnotationData;
-  onChange?: (data: DentalAnnotationData) => void;
+  onChange?: (data: DentalAnnotationData, kind: AnnotationChangeKind) => void;
   interactive?: boolean;
   toolMode?: ToolMode;
   penColor?: PenColor;
@@ -237,7 +240,7 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
         y: point.y,
         orientation: toolMode === 'stamp-upper' ? 'upper' : 'lower',
       };
-      onChange?.({ ...data, stamps: [...data.stamps, stamp] });
+      onChange?.({ ...data, stamps: [...data.stamps, stamp] }, 'commit');
       return;
     }
 
@@ -264,7 +267,7 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     const finished = inProgressStrokeRef.current;
     inProgressStrokeRef.current = null;
     if (finished) {
-      onChange?.({ ...data, strokes: [...data.strokes, finished] });
+      onChange?.({ ...data, strokes: [...data.strokes, finished] }, 'commit');
     }
   };
 
@@ -276,19 +279,23 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
   };
 
   const moveStamp = (id: string, x: number, y: number) => {
-    onChange?.({
-      ...data,
-      stamps: data.stamps.map((s) => (s.id === id ? { ...s, x, y } : s)),
-    });
+    onChange?.(
+      { ...data, stamps: data.stamps.map((s) => (s.id === id ? { ...s, x, y } : s)) },
+      'move'
+    );
   };
 
   const deleteStamp = (id: string) => {
     setSelectedStampId((current) => (current === id ? null : current));
-    onChange?.({ ...data, stamps: data.stamps.filter((s) => s.id !== id) });
+    onChange?.({ ...data, stamps: data.stamps.filter((s) => s.id !== id) }, 'commit');
   };
 
   return (
-    <div ref={containerRef} className="relative w-full" style={{ paddingBottom: `${CHART_BOX_ASPECT_RATIO * 100}%` }}>
+    <div
+      ref={containerRef}
+      className="relative w-full select-none"
+      style={{ paddingBottom: `${CHART_BOX_ASPECT_RATIO * 100}%`, WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
+    >
       <img
         src={DENTAL_CHART_IMAGE_SRC}
         alt="歯式図"

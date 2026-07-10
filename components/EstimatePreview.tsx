@@ -3,6 +3,7 @@ import { EstimateData } from '../types';
 import {
   DentalChartCanvas,
   DentalAnnotationData,
+  AnnotationChangeKind,
   EMPTY_ANNOTATION,
   ToolMode,
   PenColor,
@@ -13,7 +14,7 @@ interface EstimatePreviewProps {
   data: EstimateData;
   id?: string; // Optional ID for PDF capture targeting
   annotation?: DentalAnnotationData;
-  onAnnotationChange?: (data: DentalAnnotationData) => void;
+  onAnnotationChange?: (data: DentalAnnotationData, kind: AnnotationChangeKind) => void;
   interactive?: boolean;
   toolMode?: ToolMode;
   penColor?: PenColor;
@@ -42,8 +43,12 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
     const formattedTotal = new Intl.NumberFormat('ja-JP').format(total);
 
     return (
-      // Container setup
-      <div className="w-full flex justify-center font-serif text-slate-900">
+      // Container setup. Suppress text selection / iOS long-press callout so drawing
+      // with a stylus never turns into a selection gesture.
+      <div
+        className="w-full flex justify-center font-serif text-slate-900 select-none"
+        style={{ WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
+      >
         <div
           id={id}
           className="bg-white relative flex flex-col justify-between"
