@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Download, Trash2, X, AlertTriangle, History, Save, Pencil, ChevronUp, ChevronDown, RefreshCw, Pen, Eraser, Anchor, ZoomIn, ZoomOut, Maximize, Undo2, Type } from 'lucide-react';
+import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Download, Trash2, X, AlertTriangle, History, Save, Pencil, ChevronUp, ChevronDown, RefreshCw, Pen, Eraser, Anchor, ZoomIn, ZoomOut, Maximize, Undo2, Redo2, Type } from 'lucide-react';
 import { TREATMENT_MENU } from './constants';
 import { SelectedItem, TreatmentItem, SavedEstimate } from './types';
 import { EstimatePreview } from './components/EstimatePreview';
@@ -87,13 +87,17 @@ const App: React.FC = () => {
   // Undo stack for annotations. Only "commit" changes (finished stroke, stamp
   // add/delete, clear) are recorded — continuous stamp dragging is not.
   const undoStackRef = useRef<DentalAnnotationData[]>([]);
+  const redoStackRef = useRef<DentalAnnotationData[]>([]);
   const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const applyAnnotation = (next: DentalAnnotationData, kind: 'commit' | 'move' = 'commit') => {
     setAnnotation((prev) => {
       if (kind === 'commit') {
         undoStackRef.current.push(prev);
+        redoStackRef.current = [];
         setCanUndo(true);
+        setCanRedo(false);
       }
       return next;
     });
@@ -102,31 +106,44 @@ const App: React.FC = () => {
     setAnnotation((prev) => {
       const stack = undoStackRef.current;
       if (stack.length === 0) return prev;
+      redoStackRef.current.push(prev);
       const restored = stack.pop()!;
       setCanUndo(stack.length > 0);
+      setCanRedo(true);
+      return restored;
+    });
+  };
+  const redoAnnotation = () => {
+    setAnnotation((prev) => {
+      const stack = redoStackRef.current;
+      if (stack.length === 0) return prev;
+      undoStackRef.current.push(prev);
+      const restored = stack.pop()!;
+      setCanRedo(stack.length > 0);
+      setCanUndo(true);
       return restored;
     });
   };
   const clearAnnotation = () => {
     setAnnotation((prev) => {
       undoStackRef.current.push(prev);
+      redoStackRef.current = [];
       setCanUndo(true);
+      setCanRedo(false);
       return EMPTY_ANNOTATION;
     });
   };
 
   // Adjust the font size for new text boxes, and resize the currently selected one.
   const changeTextFontSize = (delta: number) => {
-    setTextFontSize((prev) => {
-      const next = clampTextFont(prev + delta);
-      if (selectedTextId) {
-        setAnnotation((ann) => ({
-          ...ann,
-          texts: ann.texts.map((t) => (t.id === selectedTextId ? { ...t, fontSize: next } : t)),
-        }));
-      }
-      return next;
-    });
+    const next = clampTextFont(textFontSize + delta);
+    setTextFontSize(next);
+    if (selectedTextId) {
+      setAnnotation((ann) => ({
+        ...ann,
+        texts: ann.texts.map((t) => (t.id === selectedTextId ? { ...t, fontSize: next } : t)),
+      }));
+    }
   };
 
   // --- Preview Zoom / Pan State ---
@@ -654,7 +671,7 @@ const App: React.FC = () => {
                   </div>
               </div>
               
-              {Object.entries(groupedMenu).map(([category, items]) => (
+              {(Object.entries(groupedMenu) as [string, TreatmentItem[]][]).map(([category, items]) => (
                 <div key={category} className={`bg-white rounded-xl shadow-sm border overflow-hidden ${isEditMode ? 'border-orange-200 ring-1 ring-orange-200' : 'border-slate-200'}`}>
                   <div className={`px-5 py-3 border-b ${isEditMode ? 'bg-orange-50 border-orange-100' : 'bg-slate-100 border-slate-200'}`}>
                     <h3 className={`font-bold ${isEditMode ? 'text-orange-800' : 'text-slate-700'}`}>{category}</h3>
@@ -1069,42 +1086,6 @@ const App: React.FC = () => {
                     <span className="text-xs font-bold text-slate-500 mr-1">歯式メモ:</span>
 
                     <button
-                        onClick={() => { setToolMode('pen'); setPenColor('black'); }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                            toolMode === 'pen' && penColor === 'black'
-                                ? 'bg-slate-800 text-white border-slate-800'
-                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                        }`}
-                    >
-                        <Pen size={14} />
-                        黒ペン
-                    </button>
-
-                    <button
-                        onClick={() => { setToolMode('pen'); setPenColor('red'); }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                            toolMode === 'pen' && penColor === 'red'
-                                ? 'bg-red-600 text-white border-red-600'
-                                : 'bg-white text-red-600 border-red-300 hover:bg-red-50'
-                        }`}
-                    >
-                        <Pen size={14} />
-                        赤ペン
-                    </button>
-
-                    <button
-                        onClick={() => setToolMode('eraser')}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                            toolMode === 'eraser'
-                                ? 'bg-slate-800 text-white border-slate-800'
-                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                        }`}
-                    >
-                        <Eraser size={14} />
-                        消しゴム
-                    </button>
-
-                    <button
                         onClick={() => setToolMode('stamp-upper')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'stamp-upper'
@@ -1140,49 +1121,25 @@ const App: React.FC = () => {
                         テキスト
                     </button>
 
-                    {/* Font-size control, shown while the text tool is active */}
-                    {toolMode === 'text' && (
-                        <div className="flex items-center gap-1">
-                            <button
-                                onClick={() => changeTextFontSize(-TEXT_FONT_STEP)}
-                                className="w-7 h-7 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
-                                aria-label="文字を小さく"
-                            >
-                                <span className="text-[11px]">A</span>
-                            </button>
-                            <button
-                                onClick={() => changeTextFontSize(TEXT_FONT_STEP)}
-                                className="w-7 h-7 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
-                                aria-label="文字を大きく"
-                            >
-                                <span className="text-[15px]">A</span>
-                            </button>
-                        </div>
-                    )}
-
                     <div className="w-px h-5 bg-slate-200 mx-1" />
 
-                    {([
-                        { value: 'thin', label: '細', dot: 3 },
-                        { value: 'medium', label: '中', dot: 5 },
-                        { value: 'thick', label: '太', dot: 8 },
-                    ] as { value: PenWidth; label: string; dot: number }[]).map((w) => (
+                    {/* Text font size (smaller / larger) */}
+                    <div className="flex items-center gap-1">
                         <button
-                            key={w.value}
-                            onClick={() => setPenWidth(w.value)}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                                penWidth === w.value
-                                    ? 'bg-slate-800 text-white border-slate-800'
-                                    : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                            }`}
+                            onClick={() => changeTextFontSize(-TEXT_FONT_STEP)}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
+                            aria-label="文字を小さく"
                         >
-                            <span
-                                className={`inline-block rounded-full ${penWidth === w.value ? 'bg-white' : 'bg-slate-600'}`}
-                                style={{ width: w.dot, height: w.dot }}
-                            />
-                            {w.label}
+                            <span className="text-[11px] leading-none">A</span>
                         </button>
-                    ))}
+                        <button
+                            onClick={() => changeTextFontSize(TEXT_FONT_STEP)}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
+                            aria-label="文字を大きく"
+                        >
+                            <span className="text-[15px] leading-none">A</span>
+                        </button>
+                    </div>
 
                     <div className="w-px h-5 bg-slate-200 mx-1" />
 
@@ -1197,6 +1154,19 @@ const App: React.FC = () => {
                     >
                         <Undo2 size={14} />
                         一つ戻る
+                    </button>
+
+                    <button
+                        onClick={redoAnnotation}
+                        disabled={!canRedo}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            canRedo
+                                ? 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                                : 'border-slate-200 text-slate-300 cursor-not-allowed'
+                        }`}
+                    >
+                        <Redo2 size={14} />
+                        一つ進む
                     </button>
 
                     <button
@@ -1234,6 +1204,69 @@ const App: React.FC = () => {
                             <Maximize size={14} />
                         </button>
                     </div>
+
+                    {/* Line break: pen tools go on their own row */}
+                    <div className="basis-full h-0" />
+
+                    <button
+                        onClick={() => { setToolMode('pen'); setPenColor('black'); }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            toolMode === 'pen' && penColor === 'black'
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                        }`}
+                    >
+                        <Pen size={14} />
+                        黒ペン
+                    </button>
+
+                    <button
+                        onClick={() => { setToolMode('pen'); setPenColor('red'); }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            toolMode === 'pen' && penColor === 'red'
+                                ? 'bg-red-600 text-white border-red-600'
+                                : 'bg-white text-red-600 border-red-300 hover:bg-red-50'
+                        }`}
+                    >
+                        <Pen size={14} />
+                        赤ペン
+                    </button>
+
+                    <button
+                        onClick={() => setToolMode('eraser')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                            toolMode === 'eraser'
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                        }`}
+                    >
+                        <Eraser size={14} />
+                        消しゴム
+                    </button>
+
+                    <div className="w-px h-5 bg-slate-200 mx-1" />
+
+                    {([
+                        { value: 'thin', label: '細', dot: 3 },
+                        { value: 'medium', label: '中', dot: 5 },
+                        { value: 'thick', label: '太', dot: 8 },
+                    ] as { value: PenWidth; label: string; dot: number }[]).map((w) => (
+                        <button
+                            key={w.value}
+                            onClick={() => setPenWidth(w.value)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                                penWidth === w.value
+                                    ? 'bg-slate-800 text-white border-slate-800'
+                                    : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                            <span
+                                className={`inline-block rounded-full ${penWidth === w.value ? 'bg-white' : 'bg-slate-600'}`}
+                                style={{ width: w.dot, height: w.dot }}
+                            />
+                            {w.label}
+                        </button>
+                    ))}
                 </div>
 
                 <div className="max-w-5xl mx-auto flex gap-4">

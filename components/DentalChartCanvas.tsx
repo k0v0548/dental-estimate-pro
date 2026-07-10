@@ -7,11 +7,15 @@ export type StampOrientation = 'upper' | 'lower';
 
 // Text font size as a fraction of the chart container width, so it scales identically
 // between the interactive preview and the hidden PDF-source copy.
-export const TEXT_FONT_MIN = 0.02;
-export const TEXT_FONT_MAX = 0.12;
+// Default sits in the middle of the range so text can be nudged both smaller and larger.
+export const TEXT_FONT_MIN = 0.025;
+export const TEXT_FONT_MAX = 0.1;
 export const TEXT_FONT_STEP = 0.005;
-export const TEXT_FONT_DEFAULT = 0.045;
+export const TEXT_FONT_DEFAULT = 0.06;
 export const clampTextFont = (f: number) => Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, f));
+
+// Gothic face that pairs with the sheet's Noto Serif JP (mincho).
+const TEXT_FONT_FAMILY = "'Noto Sans JP', sans-serif";
 // 'commit' = an undoable action (finished stroke, stamp add/delete);
 // 'move' = a continuous stamp drag, not recorded in undo history.
 export type AnnotationChangeKind = 'commit' | 'move';
@@ -395,7 +399,6 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
             key={t.id}
             text={t}
             fontPx={t.fontSize * renderWidth}
-            interactive={interactive}
             editingEnabled={interactive && toolMode === 'text'}
             selected={interactive && toolMode === 'text' && selectedTextId === t.id}
             autoFocus={autoFocusTextIdRef.current === t.id}
@@ -519,7 +522,6 @@ const ImplantStampMarker: React.FC<ImplantStampMarkerProps> = ({
 interface TextAnnotationMarkerProps {
   text: TextAnnotation;
   fontPx: number;
-  interactive: boolean;
   editingEnabled: boolean; // interactive AND the text tool is active
   selected: boolean;
   autoFocus: boolean;
@@ -534,7 +536,6 @@ interface TextAnnotationMarkerProps {
 const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
   text,
   fontPx,
-  interactive,
   editingEnabled,
   selected,
   autoFocus,
@@ -627,6 +628,7 @@ const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
         }`}
         style={{
           fontSize: fontPx,
+          fontFamily: TEXT_FONT_FAMILY,
           color: '#111827',
           minWidth: Math.max(6, fontPx * 0.6),
           minHeight: fontPx,
