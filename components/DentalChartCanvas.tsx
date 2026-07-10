@@ -7,11 +7,12 @@ export type StampOrientation = 'upper' | 'lower';
 
 // Text font size as a fraction of the chart container width, so it scales identically
 // between the interactive preview and the hidden PDF-source copy.
-// Default sits in the middle of the range so text can be nudged both smaller and larger.
-export const TEXT_FONT_MIN = 0.025;
-export const TEXT_FONT_MAX = 0.1;
-export const TEXT_FONT_STEP = 0.005;
-export const TEXT_FONT_DEFAULT = 0.06;
+// Baseline is a small size (large sizes aren't needed); it can be nudged a bit
+// smaller or larger from there in fine steps.
+export const TEXT_FONT_MIN = 0.015;
+export const TEXT_FONT_MAX = 0.045;
+export const TEXT_FONT_STEP = 0.0025;
+export const TEXT_FONT_DEFAULT = 0.025;
 export const clampTextFont = (f: number) => Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, f));
 
 // Gothic face that pairs with the sheet's Noto Serif JP (mincho).
