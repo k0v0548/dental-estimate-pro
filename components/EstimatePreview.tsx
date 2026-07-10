@@ -16,7 +16,7 @@ interface EstimatePreviewProps {
   annotation?: DentalAnnotationData;
   onAnnotationChange?: (data: DentalAnnotationData, kind: AnnotationChangeKind) => void;
   interactive?: boolean;
-  toolMode?: ToolMode;
+  toolMode?: ToolMode | null;
   penColor?: PenColor;
   penWidth?: PenWidth;
   zoom?: number;

@@ -98,7 +98,7 @@ interface DentalChartCanvasProps {
   data: DentalAnnotationData;
   onChange?: (data: DentalAnnotationData, kind: AnnotationChangeKind) => void;
   interactive?: boolean;
-  toolMode?: ToolMode;
+  toolMode?: ToolMode | null; // null = no tool active (taps do nothing)
   penColor?: PenColor;
   penWidth?: PenWidth;
   // Current zoom factor of the preview. Only used to re-sync the canvas backing
@@ -266,6 +266,7 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     e.preventDefault();
     setSelectedStampId(null);
     onSelectTextId?.(null); // tapping the canvas deselects any text box
+    if (!toolMode) return; // no tool selected → canvas taps do nothing
     const point = getRelativePoint(e.clientX, e.clientY);
     if (!point) return;
 

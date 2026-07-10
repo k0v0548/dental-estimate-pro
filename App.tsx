@@ -78,7 +78,9 @@ const App: React.FC = () => {
 
   // --- Dental Chart Hand-drawing / Stamp State (not persisted to history) ---
   const [annotation, setAnnotation] = useState<DentalAnnotationData>(EMPTY_ANNOTATION);
-  const [toolMode, setToolMode] = useState<ToolMode>('pen');
+  const [toolMode, setToolMode] = useState<ToolMode | null>('pen');
+  // Toggle a tool: pressing the active tool again turns it off (no tool).
+  const toggleTool = (tool: ToolMode) => setToolMode((m) => (m === tool ? null : tool));
   const [penColor, setPenColor] = useState<PenColor>('black');
   const [penWidth, setPenWidth] = useState<PenWidth>('medium');
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
@@ -447,8 +449,10 @@ const App: React.FC = () => {
 
     try {
       setIsGenerating(true);
+      // scale 3 ≈ 290 DPI at A4 so printed text stays crisp (the whole sheet is
+      // rasterized to an image, so this resolution drives print sharpness).
       const canvas = await html2canvas(input, {
-        scale: 2,
+        scale: 3,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
@@ -1086,7 +1090,7 @@ const App: React.FC = () => {
                     <span className="text-xs font-bold text-slate-500 mr-1">歯式メモ:</span>
 
                     <button
-                        onClick={() => setToolMode('stamp-upper')}
+                        onClick={() => toggleTool('stamp-upper')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'stamp-upper'
                                 ? 'bg-blue-600 text-white border-blue-600'
@@ -1098,7 +1102,7 @@ const App: React.FC = () => {
                     </button>
 
                     <button
-                        onClick={() => setToolMode('stamp-lower')}
+                        onClick={() => toggleTool('stamp-lower')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'stamp-lower'
                                 ? 'bg-blue-600 text-white border-blue-600'
@@ -1110,7 +1114,7 @@ const App: React.FC = () => {
                     </button>
 
                     <button
-                        onClick={() => setToolMode('text')}
+                        onClick={() => toggleTool('text')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'text'
                                 ? 'bg-slate-800 text-white border-slate-800'
@@ -1209,7 +1213,10 @@ const App: React.FC = () => {
                     <div className="basis-full h-0" />
 
                     <button
-                        onClick={() => { setToolMode('pen'); setPenColor('black'); }}
+                        onClick={() => {
+                            if (toolMode === 'pen' && penColor === 'black') setToolMode(null);
+                            else { setToolMode('pen'); setPenColor('black'); }
+                        }}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'pen' && penColor === 'black'
                                 ? 'bg-slate-800 text-white border-slate-800'
@@ -1221,7 +1228,10 @@ const App: React.FC = () => {
                     </button>
 
                     <button
-                        onClick={() => { setToolMode('pen'); setPenColor('red'); }}
+                        onClick={() => {
+                            if (toolMode === 'pen' && penColor === 'red') setToolMode(null);
+                            else { setToolMode('pen'); setPenColor('red'); }
+                        }}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'pen' && penColor === 'red'
                                 ? 'bg-red-600 text-white border-red-600'
@@ -1233,7 +1243,7 @@ const App: React.FC = () => {
                     </button>
 
                     <button
-                        onClick={() => setToolMode('eraser')}
+                        onClick={() => toggleTool('eraser')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
                             toolMode === 'eraser'
                                 ? 'bg-slate-800 text-white border-slate-800'
