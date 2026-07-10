@@ -215,16 +215,20 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!interactive) return;
-    activePointersRef.current.add(e.pointerId);
 
-    // A second finger (or an active pinch) means the user is zooming, not drawing:
-    // discard any stroke in progress and don't start a new one.
-    if (pinchActive || activePointersRef.current.size >= 2) {
-      if (inProgressStrokeRef.current) {
-        inProgressStrokeRef.current = null;
-        redraw();
+    // The multi-touch guard is for finger pinch-zoom only. A stylus or mouse is
+    // always a single pointer and must never be blocked here — otherwise a quick
+    // second stroke gets dropped when a previous pointerup was missed and left a
+    // stale id in the set. Only tracking touch ids keeps the stylus path clean.
+    if (e.pointerType === 'touch') {
+      activePointersRef.current.add(e.pointerId);
+      if (pinchActive || activePointersRef.current.size >= 2) {
+        if (inProgressStrokeRef.current) {
+          inProgressStrokeRef.current = null;
+          redraw();
+        }
+        return;
       }
-      return;
     }
 
     e.preventDefault();
@@ -273,7 +277,7 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!interactive) return;
-    activePointersRef.current.delete(e.pointerId);
+    if (e.pointerType === 'touch') activePointersRef.current.delete(e.pointerId);
     e.preventDefault();
     finishStroke();
   };

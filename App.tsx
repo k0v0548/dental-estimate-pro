@@ -996,7 +996,9 @@ const App: React.FC = () => {
 
       {/* Render Preview Screen */}
       {mode === 'preview' && (
-        <div className="min-h-screen flex flex-col bg-slate-500">
+        // Fixed viewport height so the header and bottom toolbar stay pinned and only
+        // the sheet area (below) scrolls/zooms. 100dvh tracks the iPad Safari toolbar.
+        <div className="h-[100dvh] flex flex-col bg-slate-500">
             <div className="bg-white p-4 shadow-md z-10 border-b border-gray-200">
                 <div className="max-w-5xl mx-auto flex items-center justify-between">
                     <h2 className="font-bold flex items-center gap-2 text-slate-800">
@@ -1006,7 +1008,7 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            <div ref={stageScrollRef} className="flex-1 overflow-auto p-4 md:p-8 bg-slate-500">
+            <div ref={stageScrollRef} className="flex-1 min-h-0 overflow-auto p-4 md:p-8 bg-slate-500">
                 {/* Sized box reserves the scaled footprint so scrolling/centering are correct;
                     the inner div does the visual scale from its top-left corner. */}
                 <div
