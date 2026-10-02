@@ -3,7 +3,7 @@ import { Plus, Minus, Settings2, ArrowRight, ArrowLeft, CheckCircle2, Loader2, D
 import { TREATMENT_MENU } from './constants';
 import { SelectedItem, TreatmentItem, SavedEstimate } from './types';
 import { EstimatePreview } from './components/EstimatePreview';
-import { DentalAnnotationData, EMPTY_ANNOTATION, ToolMode, PenColor, PenWidth, TEXT_FONT_DEFAULT, TEXT_FONT_STEP, clampTextFont } from './components/DentalChartCanvas';
+import { DentalAnnotationData, EMPTY_ANNOTATION, ToolMode, PenColor, PenWidth, TEXT_FONT_DEFAULT, TEXT_FONT_STEP, clampTextFont, TextAnnotation, getLastTextSelection, resizeTextRange, resizeAtCaret } from './components/DentalChartCanvas';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
@@ -136,16 +136,30 @@ const App: React.FC = () => {
     });
   };
 
-  // Adjust the font size for new text boxes, and resize the currently selected one.
+  // Like Word: selected characters → resize just those; a bare caret in a box with
+  // text → size of what's typed next there. Otherwise (no box, or an empty box)
+  // resize the whole box and the size used for new boxes.
   const changeTextFontSize = (delta: number) => {
-    const next = clampTextFont(textFontSize + delta);
-    setTextFontSize(next);
-    if (selectedTextId) {
-      setAnnotation((ann) => ({
-        ...ann,
-        texts: ann.texts.map((t) => (t.id === selectedTextId ? { ...t, fontSize: next } : t)),
-      }));
+    const sel = getLastTextSelection();
+    const box = [...annotation.texts, ...(annotation.pageTexts ?? [])].find((t) => t.id === selectedTextId);
+    const caret = box && sel?.id === box.id ? sel : null;
+    let range: [number, number] | null = caret && caret.end > caret.start ? [caret.start, caret.end] : null;
+    // Caret on a blank line: resize that line's newline, which sets the line's height.
+    if (!range && caret && box && box.text[caret.start] === '\n' &&
+        (caret.start === 0 || box.text[caret.start - 1] === '\n')) {
+      range = [caret.start, caret.start + 1];
     }
+    if (!range && box?.text && resizeAtCaret(box.id, delta)) return;
+    if (!range) setTextFontSize(clampTextFont(textFontSize + delta));
+    if (!selectedTextId) return;
+    const [start, end] = range ?? [0, 0];
+    const resize = (t: TextAnnotation) =>
+      t.id === selectedTextId ? resizeTextRange(t, start, end, delta) : t;
+    applyAnnotation({
+      ...annotation,
+      texts: annotation.texts.map(resize),
+      pageTexts: annotation.pageTexts?.map(resize),
+    });
   };
 
   // --- Preview Zoom / Pan State ---
@@ -1130,6 +1144,8 @@ const App: React.FC = () => {
                     {/* Text font size (smaller / larger) */}
                     <div className="flex items-center gap-1">
                         <button
+                            // Keep focus (and the selected characters) in the text box.
+                            onPointerDown={(e) => e.preventDefault()}
                             onClick={() => changeTextFontSize(-TEXT_FONT_STEP)}
                             className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
                             aria-label="文字を小さく"
@@ -1137,6 +1153,8 @@ const App: React.FC = () => {
                             <span className="text-[11px] leading-none">A</span>
                         </button>
                         <button
+                            // Keep focus (and the selected characters) in the text box.
+                            onPointerDown={(e) => e.preventDefault()}
                             onClick={() => changeTextFontSize(TEXT_FONT_STEP)}
                             className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors font-bold"
                             aria-label="文字を大きく"

@@ -1,10 +1,14 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { EstimateData } from '../types';
 import {
   DentalChartCanvas,
   DentalAnnotationData,
   AnnotationChangeKind,
   EMPTY_ANNOTATION,
+  TextAnnotation,
+  TextAnnotationMarker,
+  TEXT_FONT_DEFAULT,
+  withTextRuns,
   ToolMode,
   PenColor,
   PenWidth,
@@ -48,6 +52,58 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
     const total = calculateTotal();
     const formattedTotal = new Intl.NumberFormat('ja-JP').format(total);
 
+    // --- Sheet-level text boxes (anywhere on the page, outside the chart box) ---
+    const sheetRef = useRef<HTMLDivElement>(null);
+    const chartWidthRef = useRef<HTMLDivElement>(null);
+    const [chartWidth, setChartWidth] = useState(0);
+    const [autoFocusPageTextId, setAutoFocusPageTextId] = useState<string | null>(null);
+    const pageTexts = annotation.pageTexts ?? [];
+    const textToolActive = interactive && toolMode === 'text';
+
+    // Page texts share the chart texts' font unit (fraction of chart width).
+    // offsetWidth ignores the zoom transform, matching how the PDF copy is laid out.
+    useLayoutEffect(() => {
+      const el = chartWidthRef.current;
+      if (!el) return;
+      const update = () => setChartWidth(el.offsetWidth);
+      update();
+      const ro = new ResizeObserver(update);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, []);
+
+    const sheetPoint = (clientX: number, clientY: number) => {
+      const rect = sheetRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0 || rect.height === 0) return null;
+      return {
+        x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+        y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+      };
+    };
+
+    const setPageTexts = (next: TextAnnotation[], kind: AnnotationChangeKind) =>
+      onAnnotationChange?.({ ...annotation, pageTexts: next }, kind);
+
+    const handleSheetPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!textToolActive || pinchActive) return;
+      const target = e.target as Element;
+      // The chart box and existing text boxes handle their own taps.
+      if (target.closest('[data-chart-box]') || target.closest('[data-text-marker]')) return;
+      const point = sheetPoint(e.clientX, e.clientY);
+      if (!point) return;
+      e.preventDefault();
+      const newText: TextAnnotation = {
+        id: `ptext-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        x: point.x,
+        y: point.y,
+        text: '',
+        fontSize: textFontSize ?? TEXT_FONT_DEFAULT,
+      };
+      setAutoFocusPageTextId(newText.id);
+      setPageTexts([...pageTexts, newText], 'commit');
+      onSelectTextId?.(newText.id);
+    };
+
     return (
       // Container setup. Suppress text selection / iOS long-press callout so drawing
       // with a stylus never turns into a selection gesture.
@@ -57,7 +113,9 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
       >
         <div
           id={id}
-          className="bg-white relative flex flex-col justify-between"
+          ref={sheetRef}
+          onPointerDown={handleSheetPointerDown}
+          className={`bg-white relative flex flex-col justify-between ${textToolActive ? 'cursor-text' : ''}`}
           style={{
             width: '210mm',
             height: '297mm', // Fixed A4 height
@@ -215,7 +273,8 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             <div className="w-full mt-4">
                <div className="border-b border-black w-16 mb-1"></div>
                <p className="text-xs text-black tracking-widest mb-1">【備考】</p>
-               <div className="w-full border border-black p-2 text-sm rounded-none">
+               <div data-chart-box className="w-full border border-black p-2 text-sm rounded-none">
+                 <div ref={chartWidthRef}>
                    <DentalChartCanvas
                      data={annotation}
                      onChange={onAnnotationChange}
@@ -229,6 +288,7 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                      selectedTextId={selectedTextId}
                      onSelectTextId={onSelectTextId}
                    />
+                 </div>
                </div>
             </div>
           </main>
@@ -237,6 +297,33 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
           <footer className="mt-4 h-8">
              {/* Empty footer */}
           </footer>
+
+          {/* Sheet-level text boxes */}
+          <div className="absolute inset-0" style={{ pointerEvents: 'none' }}>
+            {pageTexts.map((t) => (
+              <TextAnnotationMarker
+                key={t.id}
+                text={t}
+                widthPx={chartWidth}
+                editingEnabled={textToolActive}
+                selected={textToolActive && selectedTextId === t.id}
+                autoFocus={autoFocusPageTextId === t.id}
+                containerRef={sheetRef}
+                onSelect={() => onSelectTextId?.(t.id)}
+                onMove={(x, y) =>
+                  setPageTexts(pageTexts.map((p) => (p.id === t.id ? { ...p, x, y } : p)), 'move')
+                }
+                onEdit={(runs) =>
+                  setPageTexts(pageTexts.map((p) => (p.id === t.id ? withTextRuns(p, runs) : p)), 'move')
+                }
+                onDelete={() => {
+                  if (selectedTextId === t.id) onSelectTextId?.(null);
+                  setPageTexts(pageTexts.filter((p) => p.id !== t.id), 'commit');
+                }}
+                onAutoFocusDone={() => setAutoFocusPageTextId(null)}
+              />
+            ))}
+          </div>
         </div>
       </div>
     );

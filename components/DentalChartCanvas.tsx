@@ -13,7 +13,9 @@ export const TEXT_FONT_MIN = 0.015;
 export const TEXT_FONT_MAX = 0.045;
 export const TEXT_FONT_STEP = 0.0025;
 export const TEXT_FONT_DEFAULT = 0.025;
-export const clampTextFont = (f: number) => Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, f));
+// Rounded so repeated +/- steps compare equal (adjacent runs can then merge).
+export const clampTextFont = (f: number) =>
+  Math.round(Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, f)) * 10000) / 10000;
 
 // Gothic face that pairs with the sheet's Noto Serif JP (mincho).
 const TEXT_FONT_FAMILY = "'Noto Sans JP', sans-serif";
@@ -78,21 +80,85 @@ export interface ImplantStamp {
   orientation: StampOrientation;
 }
 
+// A stretch of text sharing one font size (for per-character sizing, like Word).
+export interface TextRun {
+  text: string;
+  fontSize: number; // fraction of chart container width
+}
+
 export interface TextAnnotation {
   id: string;
   x: number;
   y: number;
-  text: string;
-  fontSize: number; // fraction of container width
+  text: string; // plain text of all runs joined
+  fontSize: number; // box base size (fraction of chart container width); used for empty boxes
+  runs?: TextRun[]; // absent on older boxes = one run of `text` at `fontSize`
 }
+
+export const getTextRuns = (t: TextAnnotation): TextRun[] =>
+  t.runs ?? (t.text ? [{ text: t.text, fontSize: t.fontSize }] : []);
+
+const mergeRuns = (runs: TextRun[]): TextRun[] => {
+  const out: TextRun[] = [];
+  for (const r of runs) {
+    if (!r.text) continue;
+    const last = out[out.length - 1];
+    if (last && last.fontSize === r.fontSize) out[out.length - 1] = { ...last, text: last.text + r.text };
+    else out.push({ ...r });
+  }
+  return out;
+};
+
+export const withTextRuns = (t: TextAnnotation, runs: TextRun[]): TextAnnotation => ({
+  ...t,
+  runs,
+  text: runs.map((r) => r.text).join(''),
+});
+
+// Change the size of characters [start, end) by delta; an empty range resizes the whole box.
+export const resizeTextRange = (t: TextAnnotation, start: number, end: number, delta: number): TextAnnotation => {
+  const whole = start >= end;
+  const pieces: TextRun[] = [];
+  let pos = 0;
+  for (const r of getTextRuns(t)) {
+    const rs = pos;
+    const re = pos + r.text.length;
+    pos = re;
+    const clip = (v: number) => Math.min(re, Math.max(rs, v));
+    const cuts = whole ? [rs, re] : [rs, clip(start), clip(end), re];
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const a = cuts[i];
+      const b = cuts[i + 1];
+      if (a >= b) continue;
+      const inside = whole || (a >= start && b <= end);
+      pieces.push({
+        text: r.text.slice(a - rs, b - rs),
+        fontSize: inside ? clampTextFont(r.fontSize + delta) : r.fontSize,
+      });
+    }
+  }
+  return {
+    ...withTextRuns(t, mergeRuns(pieces)),
+    fontSize: whole ? clampTextFont(t.fontSize + delta) : t.fontSize,
+  };
+};
+
+// Last caret/selection inside a text box, as character offsets. Kept outside React so
+// the toolbar's size buttons can read it even after the tap moved focus away.
+let lastTextSelection: { id: string; start: number; end: number } | null = null;
+export const getLastTextSelection = () => lastTextSelection;
 
 export interface DentalAnnotationData {
   strokes: Stroke[];
   stamps: ImplantStamp[];
   texts: TextAnnotation[];
+  // Text boxes placed anywhere on the sheet (outside the chart box). x/y are
+  // normalized to the A4 sheet; fontSize uses the same unit as chart texts
+  // (fraction of the chart box width) so both look the same size.
+  pageTexts?: TextAnnotation[];
 }
 
-export const EMPTY_ANNOTATION: DentalAnnotationData = { strokes: [], stamps: [], texts: [] };
+export const EMPTY_ANNOTATION: DentalAnnotationData = { strokes: [], stamps: [], texts: [], pageTexts: [] };
 
 interface DentalChartCanvasProps {
   data: DentalAnnotationData;
@@ -206,7 +272,9 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     const w = Math.max(1, Math.round(rect.width));
     const h = Math.max(1, Math.round(rect.height));
     sizeRef.current = { width: w, height: h };
-    setRenderWidth(w);
+    // Text is laid out inside the zoom transform, so size it from the untransformed
+    // layout width — otherwise it would be scaled twice and not match the PDF.
+    setRenderWidth(container.offsetWidth);
     canvas.width = w * CANVAS_PIXEL_RATIO;
     canvas.height = h * CANVAS_PIXEL_RATIO;
     redraw();
@@ -346,8 +414,8 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
     onChange?.({ ...data, texts: texts.map((t) => (t.id === id ? { ...t, x, y } : t)) }, 'move');
   };
 
-  const editText = (id: string, value: string) => {
-    onChange?.({ ...data, texts: texts.map((t) => (t.id === id ? { ...t, text: value } : t)) }, 'move');
+  const editText = (id: string, runs: TextRun[]) => {
+    onChange?.({ ...data, texts: texts.map((t) => (t.id === id ? withTextRuns(t, runs) : t)) }, 'move');
   };
 
   const deleteText = (id: string) => {
@@ -400,7 +468,7 @@ export const DentalChartCanvas: React.FC<DentalChartCanvasProps> = ({
           <TextAnnotationMarker
             key={t.id}
             text={t}
-            fontPx={t.fontSize * renderWidth}
+            widthPx={renderWidth}
             editingEnabled={interactive && toolMode === 'text'}
             selected={interactive && toolMode === 'text' && selectedTextId === t.id}
             autoFocus={autoFocusTextIdRef.current === t.id}
@@ -523,17 +591,108 @@ const ImplantStampMarker: React.FC<ImplantStampMarkerProps> = ({
 
 interface TextAnnotationMarkerProps {
   text: TextAnnotation;
-  fontPx: number;
+  widthPx: number; // chart container layout width; font sizes are fractions of it
   editingEnabled: boolean; // interactive AND the text tool is active
   selected: boolean;
   autoFocus: boolean;
   containerRef: React.RefObject<HTMLDivElement>;
   onSelect: () => void;
   onMove: (x: number, y: number) => void;
-  onEdit: (value: string) => void;
+  onEdit: (runs: TextRun[]) => void;
   onDelete: () => void;
   onAutoFocusDone: () => void;
 }
+
+// Zero-width space holding the caret inside an otherwise empty "type at this size"
+// span (browsers won't keep the caret in an empty span). Never saved.
+const ZWSP = '​';
+const stripZwsp = (s: string) => s.split(ZWSP).join('');
+
+// Character offset of a DOM position within root (matches saved-text indexing).
+const textOffsetOf = (root: Node, node: Node, offset: number) => {
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.setEnd(node, offset);
+  return stripZwsp(range.toString()).length;
+};
+
+// Font size at a DOM node: its nearest sized ancestor within the box. Our own spans
+// carry data-fs; spans the browser recreates while typing only have an inline px
+// font-size, which is converted back.
+const sizeAt = (node: Node, el: HTMLElement, baseSize: number, widthPx: number) => {
+  for (let p = node instanceof HTMLElement ? node : node.parentElement; p && p !== el; p = p.parentElement) {
+    if (p.dataset.fs) return Number(p.dataset.fs);
+    if (p.style.fontSize && widthPx > 0) return clampTextFont(parseFloat(p.style.fontSize) / widthPx);
+  }
+  return baseSize;
+};
+
+// With a bare caret (no selection) in the focused box, change the size of what's
+// typed next at the caret — like Word. Returns false if there's no such caret.
+export const resizeAtCaret = (id: string, delta: number): boolean => {
+  const el = document.activeElement as HTMLElement | null;
+  const sel = window.getSelection();
+  if (!el || el.dataset.textId !== id || !sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return false;
+  const widthPx = Number(el.dataset.widthPx);
+  const holder = range.startContainer;
+  // Reuse the pending span if the caret is still in it and nothing was typed yet.
+  let span = (holder instanceof HTMLElement ? holder : holder.parentElement)?.closest<HTMLElement>('[data-pending]');
+  if (!span || !el.contains(span) || stripZwsp(span.textContent ?? '') !== '') {
+    span = document.createElement('span');
+    span.dataset.pending = '';
+    span.dataset.fs = String(sizeAt(holder, el, Number(el.dataset.baseFs), widthPx));
+    span.textContent = ZWSP;
+    range.insertNode(span);
+  }
+  const next = clampTextFont(Number(span.dataset.fs) + delta);
+  span.dataset.fs = String(next);
+  span.style.fontSize = `${next * widthPx}px`;
+  const caret = document.createRange();
+  caret.setStart(span.firstChild!, span.firstChild!.textContent?.length ?? 0);
+  caret.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(caret);
+  return true;
+};
+
+// DOM position for a character offset within root.
+const domPointAt = (root: Node, offset: number): { node: Node; offset: number } => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let last: Node | null = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const len = n.textContent?.length ?? 0;
+    if (remaining <= len) return { node: n, offset: remaining };
+    remaining -= len;
+    last = n;
+  }
+  return last ? { node: last, offset: last.textContent?.length ?? 0 } : { node: root, offset: 0 };
+};
+
+// Read the box's DOM back into runs, each text node at the size of its nearest sized ancestor.
+const readRuns = (el: HTMLElement, baseSize: number, widthPx: number): TextRun[] => {
+  const runs: TextRun[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    runs.push({ text: stripZwsp(n.textContent ?? ''), fontSize: sizeAt(n, el, baseSize, widthPx) });
+  }
+  return mergeRuns(runs);
+};
+
+const renderRuns = (el: HTMLElement, runs: TextRun[], widthPx: number) => {
+  el.replaceChildren(
+    ...runs.map((r) => {
+      const span = document.createElement('span');
+      span.dataset.fs = String(r.fontSize);
+      span.style.fontSize = `${r.fontSize * widthPx}px`;
+      span.textContent = r.text;
+      return span;
+    })
+  );
+  if (el.textContent?.endsWith('\n')) ensureTrailingBreak(el);
+};
 
 // A trailing "\n" alone doesn't render a new line, so keep a <br> at the end
 // (it contributes nothing to textContent).
@@ -541,26 +700,29 @@ const ensureTrailingBreak = (el: HTMLElement) => {
   if (el.lastChild?.nodeName !== 'BR') el.appendChild(document.createElement('br'));
 };
 
-// Insert a plain "\n" at the caret instead of letting the browser wrap lines in
-// <div>s, which textContent (and so the saved text / PDF) would drop.
-const insertNewlineAtCaret = (el: HTMLElement) => {
+// Insert plain text at the caret. Used for Enter (instead of letting the browser wrap
+// lines in <div>s, which textContent would drop) and for paste (to strip formatting).
+const insertTextAtCaret = (el: HTMLElement, value: string) => {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return;
   const range = sel.getRangeAt(0);
   if (!el.contains(range.commonAncestorContainer)) return;
   range.deleteContents();
-  const node = document.createTextNode('\n');
+  const node = document.createTextNode(value);
   range.insertNode(node);
-  range.setStartAfter(node);
+  // Anchor the caret in the text node itself so removing <br>s below can't shift it.
+  range.setStart(node, value.length);
   range.collapse(true);
   sel.removeAllRanges();
   sel.addRange(range);
-  ensureTrailingBreak(el);
+  // Drop the old trailing <br>: if text lands after it, it would show an extra blank line.
+  el.querySelectorAll('br').forEach((br) => br.remove());
+  if (el.textContent?.endsWith('\n')) ensureTrailingBreak(el);
 };
 
-const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
+export const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
   text,
-  fontPx,
+  widthPx,
   editingEnabled,
   selected,
   autoFocus,
@@ -574,16 +736,62 @@ const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
   const editRef = useRef<HTMLDivElement>(null);
   const draggedRef = useRef(false);
   const startClientRef = useRef({ x: 0, y: 0 });
+  const renderedWidthRef = useRef(-1);
   const editable = editingEnabled && selected;
+  const runs = getTextRuns(text);
+  const runsKey = JSON.stringify(runs);
+  // The box's own font size sets a minimum height for every line, so use the
+  // smallest run size — that lets a blank line shrink to its newline's size.
+  const fontPx =
+    (runs.length ? Math.min(...runs.map((r) => r.fontSize)) : text.fontSize) * widthPx;
 
-  // Keep the DOM text in sync with state without clobbering the caret while typing.
+  // Keep the DOM in sync with state without clobbering the caret while typing: only
+  // re-render when the state differs from what's already on screen (e.g. a size change,
+  // undo) or the width changed. Then put a remembered selection back.
   useEffect(() => {
     const el = editRef.current;
-    if (el && el.textContent !== text.text) {
-      el.textContent = text.text;
-      if (text.text.endsWith('\n')) ensureTrailingBreak(el);
+    if (!el) return;
+    const widthChanged = renderedWidthRef.current !== widthPx;
+    if (!widthChanged && JSON.stringify(readRuns(el, text.fontSize, widthPx)) === runsKey) return;
+    renderRuns(el, runs, widthPx);
+    renderedWidthRef.current = widthPx;
+    const saved = lastTextSelection;
+    if (saved?.id === text.id && document.activeElement === el) {
+      const a = domPointAt(el, saved.start);
+      const b = domPointAt(el, saved.end);
+      const range = document.createRange();
+      range.setStart(a.node, a.offset);
+      range.setEnd(b.node, b.offset);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
     }
-  }, [text.text]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runsKey, widthPx, text.fontSize, text.id]);
+
+  // Remember the caret/selection in this box for the toolbar's size buttons.
+  useEffect(() => {
+    if (!selected) {
+      if (lastTextSelection?.id === text.id) lastTextSelection = null;
+      return;
+    }
+    const onSelectionChange = () => {
+      const el = editRef.current;
+      const sel = window.getSelection();
+      if (!el || !sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) return;
+      lastTextSelection = {
+        id: text.id,
+        start: textOffsetOf(el, range.startContainer, range.startOffset),
+        end: textOffsetOf(el, range.endContainer, range.endOffset),
+      };
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, [selected, text.id]);
+
+  const emitEdit = (el: HTMLElement) => onEdit(readRuns(el, text.fontSize, widthPx));
 
   // Focus a newly placed box and put the caret at the end.
   useEffect(() => {
@@ -627,6 +835,7 @@ const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
 
   return (
     <div
+      data-text-marker
       className="absolute"
       style={{
         left: `${text.x * 100}%`,
@@ -638,15 +847,23 @@ const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
     >
       <div
         ref={editRef}
+        data-text-id={text.id}
+        data-width-px={widthPx}
+        data-base-fs={text.fontSize}
         contentEditable={editable}
         suppressContentEditableWarning
-        onInput={(e) => onEdit(e.currentTarget.textContent ?? '')}
+        onInput={(e) => emitEdit(e.currentTarget)}
         onKeyDown={(e) => {
           // Skip the Enter that confirms Japanese IME conversion.
           if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.keyCode === 229) return;
           e.preventDefault();
-          insertNewlineAtCaret(e.currentTarget);
-          onEdit(e.currentTarget.textContent ?? '');
+          insertTextAtCaret(e.currentTarget, '\n');
+          emitEdit(e.currentTarget);
+        }}
+        onPaste={(e) => {
+          e.preventDefault();
+          insertTextAtCaret(e.currentTarget, e.clipboardData.getData('text/plain'));
+          emitEdit(e.currentTarget);
         }}
         onPointerDown={(e) => {
           // Let the caret land normally while editing; otherwise select on tap.
