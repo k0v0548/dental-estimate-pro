@@ -535,6 +535,29 @@ interface TextAnnotationMarkerProps {
   onAutoFocusDone: () => void;
 }
 
+// A trailing "\n" alone doesn't render a new line, so keep a <br> at the end
+// (it contributes nothing to textContent).
+const ensureTrailingBreak = (el: HTMLElement) => {
+  if (el.lastChild?.nodeName !== 'BR') el.appendChild(document.createElement('br'));
+};
+
+// Insert a plain "\n" at the caret instead of letting the browser wrap lines in
+// <div>s, which textContent (and so the saved text / PDF) would drop.
+const insertNewlineAtCaret = (el: HTMLElement) => {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.commonAncestorContainer)) return;
+  range.deleteContents();
+  const node = document.createTextNode('\n');
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  ensureTrailingBreak(el);
+};
+
 const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
   text,
   fontPx,
@@ -558,6 +581,7 @@ const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
     const el = editRef.current;
     if (el && el.textContent !== text.text) {
       el.textContent = text.text;
+      if (text.text.endsWith('\n')) ensureTrailingBreak(el);
     }
   }, [text.text]);
 
@@ -617,6 +641,13 @@ const TextAnnotationMarker: React.FC<TextAnnotationMarkerProps> = ({
         contentEditable={editable}
         suppressContentEditableWarning
         onInput={(e) => onEdit(e.currentTarget.textContent ?? '')}
+        onKeyDown={(e) => {
+          // Skip the Enter that confirms Japanese IME conversion.
+          if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.keyCode === 229) return;
+          e.preventDefault();
+          insertNewlineAtCaret(e.currentTarget);
+          onEdit(e.currentTarget.textContent ?? '');
+        }}
         onPointerDown={(e) => {
           // Let the caret land normally while editing; otherwise select on tap.
           if (!editable) {

@@ -181,7 +181,10 @@ export const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                                         {item.quantity}
                                     </td>
                                     <td className="border border-black py-2 px-2 text-right font-medium text-black font-nums text-sm align-middle">
-                                        ¥{new Intl.NumberFormat('ja-JP').format(item.price * item.quantity)}
+                                        {/* Quantity 0 = listed for reference only; excluded from the total. */}
+                                        {item.quantity === 0
+                                            ? ''
+                                            : `¥${new Intl.NumberFormat('ja-JP').format(item.price * item.quantity)}`}
                                     </td>
                                     <td className="border border-black py-2 px-2 text-center text-[10px] text-black align-middle font-nums">
                                         {item.site}

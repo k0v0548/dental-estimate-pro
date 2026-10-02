@@ -506,7 +506,7 @@ const App: React.FC = () => {
     setSelectedItems((prev) =>
       prev.map((item) => {
         if (item.id === id) {
-          const newQ = Math.max(1, item.quantity + delta);
+          const newQ = Math.max(0, item.quantity + delta);
           return { ...item, quantity: newQ };
         }
         return item;
@@ -518,7 +518,7 @@ const App: React.FC = () => {
     setSelectedItems((prev) =>
       prev.map((item) => {
         if (item.id === id) {
-          return { ...item, quantity: Math.max(1, val) };
+          return { ...item, quantity: Math.max(0, val) };
         }
         return item;
       })
@@ -776,7 +776,7 @@ const App: React.FC = () => {
                                             type="number" 
                                             className="w-10 text-center h-full outline-none text-sm font-bold text-slate-700 bg-transparent"
                                             value={selectedData.quantity}
-                                            onChange={(e) => setQuantity(item.id, parseInt(e.target.value) || 1)}
+                                            onChange={(e) => setQuantity(item.id, parseInt(e.target.value) || 0)}
                                         />
                                         <button
                                           onClick={() => updateQuantity(item.id, 1)}
